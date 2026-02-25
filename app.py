@@ -5,7 +5,7 @@ import pandas as pd
 import json
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gestão Finanças 2026", layout="wide")
+st.set_page_config(page_title="Sistema Financeiro Barbino", layout="wide")
 
 def conectar_google():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -20,7 +20,6 @@ def conectar_google():
 # --- INICIALIZAÇÃO ---
 try:
     client = conectar_google()
-    # Abre a planilha pelo nome exato que está no teu Drive
     sheet = client.open("FINANÇAS").get_worksheet(0)
 except Exception as e:
     st.error(f"Erro de conexão: {e}")
@@ -28,65 +27,69 @@ except Exception as e:
 
 st.title("🏠 Sistema Financeiro Barbino 2026")
 
-# --- CARREGAR DADOS ---
-# Forçamos a leitura para garantir que temos os dados mais frescos
-dados = sheet.get_all_values()
-df = pd.DataFrame(dados[1:], columns=dados[0])
+# --- CARREGAR DADOS (APENAS COLUNAS A ATÉ G) ---
+# Lemos apenas o intervalo que importa para evitar erro de colunas duplicadas no resto da planilha
+valores = sheet.get("A1:G500") 
+if valores:
+    cabecalho = ["ANO", "MÊS", "STATUS", "DATA VENC", "TIPO", "VALOR", "DESCRIÇÃO"]
+    # Criamos o DataFrame usando apenas os dados abaixo do cabeçalho
+    df = pd.DataFrame(valores[1:], columns=cabecalho)
+else:
+    st.error("Não foi possível ler os dados da planilha.")
+    st.stop()
 
 # --- 1. VISUALIZAÇÃO ---
-st.subheader("📊 Visualização Atual (Planilha)")
+st.subheader("📊 Visualização das Colunas Principais (A-G)")
 st.dataframe(df, use_container_width=True)
 
 st.divider()
 
 # --- 2. MENU DE OPERAÇÕES ---
-aba_escolhida = st.radio("O que deseja fazer?", ["Editar Linha Existente", "Adicionar Novo Lançamento"], horizontal=True)
+operacao = st.radio("Selecione a operação:", ["Adicionar Novo Lançamento", "Editar Linha"], horizontal=True)
 
-# Lista das 7 colunas principais (A até G) baseada na tua imagem
-colunas_principais = ["ANO", "MÊS", "STATUS", "DATA VENC", "TIPO", "VALOR", "DESCRIÇÃO"]
-
-if aba_escolhida == "Editar Linha Existente":
-    st.subheader("📝 Editar Lançamento")
-    linha_selecionada = st.selectbox("Selecione a linha para editar:", 
-                                     options=df.index, 
-                                     format_func=lambda x: f"Linha {x + 2} - {df.iloc[x]['DESCRIÇÃO']}")
-    
-    valores_atuais = df.iloc[linha_selecionada]
-    
-    with st.form("form_editar"):
-        novos_dados = []
+if operacao == "Adicionar Novo Lançamento":
+    st.subheader("➕ Novo Lançamento")
+    with st.form("form_novo"):
         c1, c2 = st.columns(2)
-        for i, col_nome in enumerate(colunas_principais):
-            # Usamos uma chave (key) única para evitar o erro de DuplicateElementId
-            with c1 if i % 2 == 0 else c2:
-                # Preenchemos com o valor que já existe na planilha
-                valor_original = valores_atuais[i] if i < len(valores_atuais) else ""
-                val = st.text_input(f"{col_nome}", value=valor_original, key=f"edit_{i}")
-                novos_dados.append(val)
+        v_ano = c1.text_input("ANO", value="2026")
+        v_mes = c2.text_input("MÊS (ex: jan/26)")
+        v_status = c1.selectbox("STATUS", ["", "OK", "PENDENTE"])
+        v_venc = c2.text_input("DATA VENC (Dia)")
+        v_tipo = c1.selectbox("TIPO", ["ENTRADA", "SAÍDA", "SALDO", "RESGATE"])
+        v_valor = c2.text_input("VALOR (ex: 1500,00)")
+        v_desc = st.text_input("DESCRIÇÃO DAS ENTRADAS E DESPESAS")
         
-        btn_editar = st.form_submit_button("✅ Atualizar na Planilha")
+        submit = st.form_submit_button("💾 Salvar na Planilha")
         
-        if btn_editar:
-            num_linha = int(linha_selecionada) + 2
-            sheet.update(f"A{num_linha}:G{num_linha}", [novos_dados])
-            st.success(f"Linha {num_linha} atualizada!")
+        if submit:
+            nova_linha = [v_ano, v_mes, v_status, v_venc, v_tipo, v_valor, v_desc]
+            sheet.append_row(nova_linha)
+            st.success("Adicionado com sucesso!")
             st.rerun()
 
 else:
-    st.subheader("➕ Novo Lançamento")
-    with st.form("form_novo"):
-        novos_dados = []
+    st.subheader("📝 Editar Linha")
+    idx = st.selectbox("Selecione a linha para editar:", 
+                       options=df.index, 
+                       format_func=lambda x: f"Linha {x+2}: {df.iloc[x]['DESCRIÇÃO']}")
+    
+    linha_atual = df.iloc[idx]
+    
+    with st.form("form_editar"):
         c1, c2 = st.columns(2)
-        for i, col_nome in enumerate(colunas_principais):
-            with c1 if i % 2 == 0 else c2:
-                # Sugestão de valores padrão para facilitar
-                valor_padrao = "2026" if col_nome == "ANO" else ""
-                val = st.text_input(f"{col_nome}", value=valor_padrao, key=f"novo_{i}")
-                novos_dados.append(val)
+        e_ano = c1.text_input("ANO", value=linha_atual["ANO"])
+        e_mes = c2.text_input("MÊS", value=linha_atual["MÊS"])
+        e_status = c1.text_input("STATUS", value=linha_atual["STATUS"])
+        e_venc = c2.text_input("DATA VENC", value=linha_atual["DATA VENC"])
+        e_tipo = c1.text_input("TIPO", value=linha_atual["TIPO"])
+        e_valor = c2.text_input("VALOR", value=linha_atual["VALOR"])
+        e_desc = st.text_input("DESCRIÇÃO", value=linha_atual["DESCRIÇÃO"])
         
-        btn_salvar = st.form_submit_button("💾 Salvar Novo Lançamento")
+        update = st.form_submit_button("✅ Atualizar Dados")
         
-        if btn_salvar:
-            sheet.append_row(novos_dados)
-            st.success("Novo lançamento adicionado com sucesso!")
+        if update:
+            dados_atualizados = [e_ano, e_mes, e_status, e_venc, e_tipo, e_valor, e_desc]
+            num_linha = int(idx) + 2
+            sheet.update(f"A{num_linha}:G{num_linha}", [dados_atualizados])
+            st.success(f"Linha {num_linha} atualizada!")
             st.rerun()
