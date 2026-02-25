@@ -22,7 +22,7 @@ def conectar_google():
 try:
     client = conectar_google()
     # Abre a planilha pelo nome exato
-    sheet = client.open("FINANÇAS").worksheet("CONTAS 2026")
+    sheet = client.open("FINANÇAS").worksheet("FINANÇAS")
 except Exception as e:
     st.error(f"Erro de conexão: {e}")
     st.stop()
