@@ -5,93 +5,91 @@ import pandas as pd
 import json
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Dashboard Barbino 2026", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Sistema Financeiro Barbino", layout="wide")
 
 def conectar_google():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds_info = json.loads(st.secrets["gcp_service_account"])
+    if "gcp_service_account" in st.secrets:
+        creds_info = json.loads(st.secrets["gcp_service_account"])
+    else:
+        with open("credentials.json") as f:
+            creds_info = json.load(f)
     creds = Credentials.from_service_account_info(creds_info, scopes=scope)
     return gspread.authorize(creds)
 
-# --- INICIALIZAÇÃO E LIMPEZA DE DADOS ---
+# --- INICIALIZAÇÃO ---
 try:
     client = conectar_google()
     sheet = client.open("FINANÇAS").get_worksheet(0)
-    
-    # Lemos os dados
-    valores = sheet.get("A1:G1000")
-    cabecalho = ["ANO", "MÊS", "STATUS", "DATA VENC", "TIPO", "VALOR", "DESCRIÇÃO"]
-    df = pd.DataFrame(valores[1:], columns=cabecalho)
-
-    # Limpeza para cálculos: Transformar "1.500,00" em número real
-    def limpar_valor(v):
-        if not v: return 0.0
-        return float(v.replace('.', '').replace(',', '.'))
-
-    df['VALOR_NUM'] = df['VALOR'].apply(limpar_valor)
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Erro de conexão: {e}")
     st.stop()
 
-# --- BARRA LATERAL (FILTROS) ---
-st.sidebar.title("🔍 Filtros de Visualização")
-mes_selecionado = st.sidebar.selectbox("Escolha o Mês:", options=df['MÊS'].unique())
-df_mes = df[df['MÊS'] == mes_selecionado]
+st.title("🏠 Sistema Financeiro Barbino 2026")
 
-# --- PAINEL PRINCIPAL (DASHBOARD) ---
-st.title(f"📊 Controle Financeiro - {mes_selecionado}")
+# --- CARREGAR DADOS (APENAS COLUNAS A ATÉ G) ---
+# Lemos apenas o intervalo que importa para evitar erro de colunas duplicadas no resto da planilha
+valores = sheet.get("A1:G500") 
+if valores:
+    cabecalho = ["ANO", "MÊS", "STATUS", "DATA VENC", "TIPO", "VALOR", "DESCRIÇÃO"]
+    # Criamos o DataFrame usando apenas os dados abaixo do cabeçalho
+    df = pd.DataFrame(valores[1:], columns=cabecalho)
+else:
+    st.error("Não foi possível ler os dados da planilha.")
+    st.stop()
 
-# Cálculos para os Cards
-entradas = df_mes[df_mes['TIPO'] == 'ENTRADA']['VALOR_NUM'].sum()
-saidas = df_mes[df_mes['TIPO'] == 'SAÍDA']['VALOR_NUM'].sum()
-investimentos = df_mes[df_mes['TIPO'] == 'RESGATE']['VALOR_NUM'].sum()
-saldo_final = entradas - saidas
-
-# Exibição dos Cards (Métricas)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Entradas", f"R$ {entradas:,.2f}")
-c2.metric("Total Saídas", f"R$ {saidas:,.2f}", delta_color="inverse")
-c3.metric("Investimentos/Resgates", f"R$ {investimentos:,.2f}")
-c4.metric("Saldo do Mês", f"R$ {saldo_final:,.2f}")
+# --- 1. VISUALIZAÇÃO ---
+st.subheader("📊 Visualização das Colunas Principais (A-G)")
+st.dataframe(df, use_container_width=True)
 
 st.divider()
 
-# --- ANÁLISE DETALHADA ---
-col_graf1, col_graf2 = st.columns(2)
+# --- 2. MENU DE OPERAÇÕES ---
+operacao = st.radio("Selecione a operação:", ["Adicionar Novo Lançamento", "Editar Linha"], horizontal=True)
 
-with col_graf1:
-    st.subheader("💳 Gastos por Categoria (Cartões/Financ)")
-    # Agrupamos por palavras-chave na descrição
-    df_mes_saida = df_mes[df_mes['TIPO'] == 'SAÍDA']
-    st.bar_chart(df_mes_saida.set_index('DESCRIÇÃO')['VALOR_NUM'])
+if operacao == "Adicionar Novo Lançamento":
+    st.subheader("➕ Novo Lançamento")
+    with st.form("form_novo"):
+        c1, c2 = st.columns(2)
+        v_ano = c1.text_input("ANO", value="2026")
+        v_mes = c2.text_input("MÊS (ex: jan/26)")
+        v_status = c1.selectbox("STATUS", ["", "OK", "PENDENTE"])
+        v_venc = c2.text_input("DATA VENC (Dia)")
+        v_tipo = c1.selectbox("TIPO", ["ENTRADA", "SAÍDA", "SALDO", "RESGATE"])
+        v_valor = c2.text_input("VALOR (ex: 1500,00)")
+        v_desc = st.text_input("DESCRIÇÃO DAS ENTRADAS E DESPESAS")
+        
+        submit = st.form_submit_button("💾 Salvar na Planilha")
+        
+        if submit:
+            nova_linha = [v_ano, v_mes, v_status, v_venc, v_tipo, v_valor, v_desc]
+            sheet.append_row(nova_linha)
+            st.success("Adicionado com sucesso!")
+            st.rerun()
 
-with col_graf2:
-    st.subheader("📅 Resumo Anual (Geral)")
-    resumo_anual = df.groupby('MÊS')['VALOR_NUM'].sum()
-    st.line_chart(resumo_anual)
-
-# --- ABA DE GESTÃO (EDITAR/INCLUIR) ---
-st.divider()
-expander = st.expander("📝 Gerenciar Dados (Adicionar ou Editar Linhas)")
-with expander:
-    op = st.radio("Ação:", ["Novo", "Editar"], horizontal=True)
+else:
+    st.subheader("📝 Editar Linha")
+    idx = st.selectbox("Selecione a linha para editar:", 
+                       options=df.index, 
+                       format_func=lambda x: f"Linha {x+2}: {df.iloc[x]['DESCRIÇÃO']}")
     
-    if op == "Novo":
-        with st.form("novo"):
-            cols = st.columns(3)
-            v_ano = cols[0].text_input("ANO", "2026")
-            v_mes = cols[1].text_input("MÊS", mes_selecionado)
-            v_status = cols[2].selectbox("STATUS", ["PENDENTE", "OK"])
-            v_tipo = st.selectbox("TIPO", ["ENTRADA", "SAÍDA", "RESGATE", "SALDO"])
-            v_desc = st.text_input("DESCRIÇÃO")
-            v_valor = st.text_input("VALOR (Ex: 150,00)")
-            
-            if st.form_submit_button("Salvar na Planilha"):
-                sheet.append_row([v_ano, v_mes, v_status, "", v_tipo, v_valor, v_desc])
-                st.success("Adicionado!")
-                st.rerun()
-    else:
-        # Lógica de edição semelhante à anterior...
-        idx = st.selectbox("Selecione para editar:", options=df_mes.index, 
-                           format_func=lambda x: f"{df_mes.loc[x, 'DESCRIÇÃO']} ({df_mes.loc[x, 'VALOR']})")
-        # (Campos de edição aqui...)
+    linha_atual = df.iloc[idx]
+    
+    with st.form("form_editar"):
+        c1, c2 = st.columns(2)
+        e_ano = c1.text_input("ANO", value=linha_atual["ANO"])
+        e_mes = c2.text_input("MÊS", value=linha_atual["MÊS"])
+        e_status = c1.text_input("STATUS", value=linha_atual["STATUS"])
+        e_venc = c2.text_input("DATA VENC", value=linha_atual["DATA VENC"])
+        e_tipo = c1.text_input("TIPO", value=linha_atual["TIPO"])
+        e_valor = c2.text_input("VALOR", value=linha_atual["VALOR"])
+        e_desc = st.text_input("DESCRIÇÃO", value=linha_atual["DESCRIÇÃO"])
+        
+        update = st.form_submit_button("✅ Atualizar Dados")
+        
+        if update:
+            dados_atualizados = [e_ano, e_mes, e_status, e_venc, e_tipo, e_valor, e_desc]
+            num_linha = int(idx) + 2
+            sheet.update(f"A{num_linha}:G{num_linha}", [dados_atualizados])
+            st.success(f"Linha {num_linha} atualizada!")
+            st.rerun()
