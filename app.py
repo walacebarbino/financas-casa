@@ -3,9 +3,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import json
+import plotly.graph_objects as go
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Dashboard Financeiro Barbino", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Gestão Barbino", layout="wide")
 
 def conectar():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -13,15 +14,13 @@ def conectar():
     creds = Credentials.from_service_account_info(creds_info, scopes=scope)
     return gspread.authorize(creds)
 
-# --- PROCESSAMENTO DE DADOS ---
+# --- CARREGAMENTO ---
 try:
     client = conectar()
     sheet = client.open("FINANÇAS").worksheet("FINANÇAS")
-    # Lemos apenas A até G para garantir performance e evitar erros de colunas extras
     dados = sheet.get("A1:G3000") 
     df = pd.DataFrame(dados[1:], columns=["ANO", "MÊS", "STATUS", "DATA_VENC", "TIPO", "VALOR", "DESCRIÇÃO"])
 
-    # Função para converter os valores brasileiros (R$ 1.200,50) em números para o Python
     def para_float(v):
         if not v or str(v).strip() == "": return 0.0
         v = str(v).replace('R$', '').replace('.', '').replace(',', '.').strip()
@@ -30,79 +29,93 @@ try:
 
     df['VALOR_NUM'] = df['VALOR'].apply(para_float)
 except Exception as e:
-    st.error(f"Erro ao conectar: {e}")
+    st.error(f"Erro: {e}")
     st.stop()
 
-# --- BARRA LATERAL (FILTROS) ---
-st.sidebar.header("🗓️ Período de Análise")
-meses = df['MÊS'].unique()
-mes_selecionado = st.sidebar.selectbox("Selecione o Mês:", meses, index=len(meses)-1)
+# --- BARRA LATERAL (FILTROS + NOVO LANÇAMENTO) ---
+with st.sidebar:
+    st.header("🗓️ Filtros")
+    meses = df['MÊS'].unique()
+    mes_selecionado = st.selectbox("Mês de Referência:", meses, index=len(meses)-1)
+    
+    st.divider()
+    st.header("➕ Novo Lançamento")
+    with st.form("novo_sidebar"):
+        n_tipo = st.selectbox("Tipo", ["ENTRADA", "SAÍDA", "RESGATE", "SALDO", "INVESTIMENTO"])
+        n_valor = st.text_input("Valor (Ex: 1.500,00)")
+        n_desc = st.text_input("Descrição")
+        if st.form_submit_button("Lançar na Planilha"):
+            sheet.append_row(["2026", mes_selecionado, "OK", "", n_tipo, n_valor, n_desc.upper()])
+            st.success("Lançado!")
+            st.rerun()
 
-# Filtramos os dados para o dashboard
+# --- LÓGICA FINANCEIRA (BATENDO COM A PLANILHA) ---
 df_mes = df[df['MÊS'] == mes_selecionado]
 
-# --- LÓGICA DE CÁLCULOS (INTELIGÊNCIA DO SISTEMA) ---
-# Separamos os dados por categoria baseados na sua descrição
-entradas = df_mes[df_mes['TIPO'] == 'ENTRADA']['VALOR_NUM'].sum()
-saidas = abs(df_mes[df_mes['TIPO'] == 'SAÍDA']['VALOR_NUM'].sum())
-investimentos = abs(df_mes[df_mes['TIPO'] == 'RESGATE']['VALOR_NUM'].sum())
+# Cálculos Precisos
+v_entrada = df_mes[df_mes['TIPO'] == 'ENTRADA']['VALOR_NUM'].sum()
+v_saldo_ant = df_mes[df_mes['TIPO'] == 'SALDO']['VALOR_NUM'].sum()
+v_resgate = df_mes[df_mes['TIPO'] == 'RESGATE']['VALOR_NUM'].sum()
+v_saida = abs(df_mes[df_mes['TIPO'] == 'SAÍDA']['VALOR_NUM'].sum())
+v_invest = abs(df_mes[df_mes['TIPO'] == 'INVESTIMENTO']['VALOR_NUM'].sum())
 
-# Busca automática por palavras-chave
-cartoes = abs(df_mes[df_mes['DESCRIÇÃO'].str.contains("CARTÃO", na=False, case=False)]['VALOR_NUM'].sum())
-financiamentos = abs(df_mes[df_mes['DESCRIÇÃO'].str.contains("FINANC", na=False, case=False)]['VALOR_NUM'].sum())
-educacao = abs(df_mes[df_mes['DESCRIÇÃO'].str.contains("EDUCAÇÃO|FACULDADE|ESCOLA", na=False, case=False)]['VALOR_NUM'].sum())
+# Saldo Líquido = (Entradas + Saldo Ant + Resgates) - (Saídas + Investimentos)
+saldo_real = (v_entrada + v_saldo_ant + v_resgate) - (v_saida + v_invest)
 
 # --- DASHBOARD VISUAL ---
-st.title(f"🏦 Controle Barbino - {mes_selecionado}")
+st.title(f"📊 Dashboard Barbino - {mes_selecionado}")
 
-# Linha 1: Métricas Principais
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Receitas", f"R$ {entradas:,.2f}")
-m2.metric("Despesas", f"R$ {saidas:,.2f}", delta=f"-{saidas:,.2f}", delta_color="inverse")
-m3.metric("Investido", f"R$ {investimentos:,.2f}")
-saldo = entradas - saidas - investimentos
-m4.metric("Saldo Líquido", f"R$ {saldo:,.2f}", delta="Em conta")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Entradas + Saldo Ant", f"R$ {v_entrada + v_saldo_ant:,.2f}")
+c2.metric("Saídas (Gastos)", f"R$ {v_saida:,.2f}", delta_color="inverse")
+c3.metric("Resgates", f"R$ {v_resgate:,.2f}")
+c4.metric("SALDO LÍQUIDO", f"R$ {saldo_real:,.2f}", delta="Bate com Planilha")
 
 st.divider()
 
-# Linha 2: Resumo de Gastos Fixos/Grandes
-st.subheader("📊 Resumo de Grandes Grupos")
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.info(f"💳 **Cartões:** R$ {cartoes:,.2f}")
-with c2:
-    st.warning(f"🏠 **Financ/Cons:** R$ {financiamentos:,.2f}")
-with c3:
-    st.success(f"🎓 **Educação:** R$ {educacao:,.2f}")
+# --- GRÁFICO HÍBRIDO (ENTRADAS VS CARTÕES) ---
+st.subheader("📈 Desempenho Mensal: Entradas vs Gastos em Cartão")
 
+# Preparar dados para o gráfico anual
+df_anual = df.groupby(['MÊS', 'TIPO'])['VALOR_NUM'].sum().unstack(fill_value=0)
+df_cartoes = df[df['DESCRIÇÃO'].str.contains("CARTÃO", na=False)].groupby('MÊS')['VALOR_NUM'].apply(lambda x: abs(x.sum()))
+
+fig = go.Figure()
+# Barras para Entradas
+fig.add_trace(go.Bar(x=df_anual.index, y=df_anual['ENTRADA'], name='Entradas', marker_color='#00b4d8'))
+# Linha para Cartões
+fig.add_trace(go.Scatter(x=df_cartoes.index, y=df_cartoes.values, name='Gastos Cartão', line=dict(color='#ff4b4b', width=4)))
+
+fig.update_layout(barmode='group', template="plotly_white")
+st.plotly_chart(fig, use_container_width=True)
+
+# --- DISTRIBUIÇÃO DO MÊS (PIZZA COM %) ---
+st.subheader("🍕 Distribuição por Tipo")
+dist_data = df_mes.groupby('TIPO')['VALOR_NUM'].sum().abs()
+fig_pie = go.Figure(data=[go.Pie(labels=dist_data.index, values=dist_data.values, hole=.3)])
+st.plotly_chart(fig_pie)
+
+# --- TABELA DE EDIÇÃO E EXCLUSÃO ---
 st.divider()
+st.subheader("📑 Visualização e Edição da Planilha")
 
-# Linha 3: Gráficos
-g1, g2 = st.columns([2, 1])
-with g1:
-    st.subheader("📅 Evolução Mensal de Entradas")
-    evolucao = df[df['TIPO'] == 'ENTRADA'].groupby('MÊS')['VALOR_NUM'].sum()
-    st.line_chart(evolucao)
+# Exibir dataframe com seleção para edição/exclusão
+st.dataframe(df_mes[["TIPO", "VALOR", "DESCRIÇÃO", "STATUS"]], use_container_width=True)
 
-with g2:
-    st.subheader("🍕 Distribuição do Mês")
-    labels = ['Saldo', 'Saídas', 'Investido']
-    valores_pizza = [max(0, saldo), saidas, investimentos]
-    # Usando gráfico de barras simples para representar a proporção
-    st.bar_chart(pd.DataFrame(valores_pizza, index=labels))
-
-# --- GESTÃO DE DADOS ---
-st.divider()
-with st.expander("🛠️ Adicionar novo lançamento à planilha"):
-    with st.form("form_novo"):
-        col_a, col_b, col_c = st.columns(3)
-        novo_mes = col_a.text_input("Mês (ex: jan/26)", value=mes_selecionado)
-        novo_tipo = col_b.selectbox("Tipo", ["ENTRADA", "SAÍDA", "RESGATE", "SALDO"])
-        novo_valor = col_c.text_input("Valor (ex: 1.250,00)")
-        novo_desc = st.text_input("Descrição (Ex: CARTÃO ITAU, PICPAY, MOTO)")
-        
-        if st.form_submit_button("Lançar na Planilha"):
-            # Envia para a planilha mantendo o padrão
-            sheet.append_row(["2026", novo_mes, "OK", "", novo_tipo, novo_valor, novo_desc.upper()])
-            st.success("Lançado com sucesso! Atualize a página.")
+with st.expander("📝 Editar ou Excluir Linha Específica"):
+    linha_idx = st.selectbox("Selecione a linha pela Descrição:", options=df_mes.index, 
+                             format_func=lambda x: f"{df_mes.loc[x, 'DESCRIÇÃO']} - {df_mes.loc[x, 'VALOR']}")
+    
+    col_ed1, col_ed2 = st.columns(2)
+    with col_ed1:
+        if st.button("🗑️ Excluir Linha permanentemente"):
+            # O gspread usa índice 1, então somamos 2 (1 pelo cabeçalho, 1 pelo índice 0)
+            sheet.delete_rows(int(linha_idx) + 2)
+            st.warning("Linha excluída!")
+            st.rerun()
+    with col_ed2:
+        novo_status = st.text_input("Mudar Status (ex: OK)", value=df_mes.loc[linha_idx, 'STATUS'])
+        if st.button("💾 Salvar Alteração de Status"):
+            sheet.update_cell(int(linha_idx) + 2, 3, novo_status)
+            st.success("Atualizado!")
             st.rerun()
